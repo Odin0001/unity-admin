@@ -1,0 +1,14 @@
+# Root-level ignores only — backend/.gitignore and frontend/.gitignore
+# each cover their own subtree (target/, node_modules/, dist/, ...).
+
+.env
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp

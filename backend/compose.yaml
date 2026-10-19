@@ -1,0 +1,87 @@
+# Full local stack for the platform admin (super tenant): Postgres, Redis,
+# and the app itself (frontend + backend bundled into one image by the
+# repo-root Containerfile).
+#
+# Host ports are offset from the tenant platform's stack (5433/6380/8081)
+# so both can run side by side.
+#
+# Usage (requires podman-compose):
+#   cp .env.example .env   # adjust credentials as needed
+#   podman-compose up -d --build
+
+services:
+  postgres:
+    image: quay.io/sclorg/postgresql-16-c10s:latest
+    container_name: admin_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRESQL_USER: ${POSTGRES_USER:-admin_owner}
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD:-admin_dev_password}
+      POSTGRESQL_DATABASE: ${POSTGRES_DB:-platform_admin}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/pgsql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-admin_owner} -d ${POSTGRES_DB:-platform_admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - admin_network
+
+  redis:
+    image: quay.io/sclorg/redis-7-c9s:latest
+    container_name: admin_redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-admin_dev_password}
+    command: ["run-redis", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/var/lib/redis/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-admin_dev_password} --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - admin_network
+
+  app:
+    build:
+      # Relative to this file, so `..` is the repo root, where the
+      # Containerfile lives (podman-compose picks it up by name).
+      context: ..
+    image: admin:local
+    container_name: admin_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-admin_owner}:${POSTGRES_PASSWORD:-admin_dev_password}@postgres:5432/${POSTGRES_DB:-platform_admin}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-admin_dev_password}@redis:6379
+      BIND_ADDR: 0.0.0.0:8080
+      SUPER_USER_EMAIL: ${SUPER_USER_EMAIL:-}
+      SUPER_USER_PASSWORD: ${SUPER_USER_PASSWORD:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${APP_PORT:-8081}:8080"
+    networks:
+      - admin_network
+
+networks:
+  admin_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: admin_postgres_data
+  redis_data:
+    name: admin_redis_data
