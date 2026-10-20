@@ -3,7 +3,7 @@
 ## Project Goal & Architectural Blueprint
 
 ## Final goal (read before making ANY change)
-This skill establishes the comprehensive blueprint and vision for the ERP Modular Monolith application, bundling a TypeScript/React SPA directly into a single Rust/Axum executable inside a single Podman container. The final project should be a modular software that uses pay-per-module strategy with customizable permissions 
+This skill establishes the comprehensive blueprint and vision for the ERP Modular Monolith application, bundling a TypeScript/React SPA directly into a single Rust/Axum executable inside a single Podman container. The final project should be an admin software that monitors and controls other tenants in rust-unity-tenants including users, billing, databases, pricing, etc.. 
 
 ## Target Architecture & Tech Stack
 * Architecture: Modular Monolith with Domain-Driven Design (DDD) principles.
