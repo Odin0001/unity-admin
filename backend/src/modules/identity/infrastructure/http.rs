@@ -9,9 +9,9 @@ use serde::Deserialize;
 use crate::{
     modules::identity::{
         application::{self, Session},
-        domain::User,
+        domain::{User, UserSummary},
     },
-    platform::{error::AppError, AppState},
+    platform::{error::AppError, rate_limit::ClientIp, AppState},
 };
 
 pub fn router() -> Router<AppState> {
@@ -19,6 +19,14 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
+        .route("/password", post(change_password))
+        .route("/password-reset", post(request_password_reset))
+        .route("/password-reset/confirm", post(reset_password))
+}
+
+/// Super users managing each other.
+pub fn users_router() -> Router<AppState> {
+    Router::new().route("/", get(list_users).post(invite_user))
 }
 
 /// Taking this as a handler argument is what makes a route require a
@@ -42,6 +50,7 @@ struct LoginRequest {
 
 async fn login(
     State(state): State<AppState>,
+    client_ip: ClientIp,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<Session>, AppError> {
@@ -49,7 +58,15 @@ async fn login(
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok());
 
-    let session = application::login(&state.db, &req.email, req.password, user_agent).await?;
+    let session = application::login(
+        &state.db,
+        &state.limiter,
+        &client_ip.key(),
+        &req.email,
+        req.password,
+        user_agent,
+    )
+    .await?;
     tracing::info!(user_id = %session.user.id, "user signed in");
     Ok(Json(session))
 }
@@ -63,6 +80,81 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Sta
 
 async fn me(CurrentUser(user): CurrentUser) -> Json<User> {
     Json(user)
+}
+
+#[derive(Deserialize)]
+struct ChangePassword {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    headers: HeaderMap,
+    Json(req): Json<ChangePassword>,
+) -> Result<StatusCode, AppError> {
+    let token = bearer(&headers).ok_or(AppError::Unauthorized)?;
+    application::change_password(
+        &state.db,
+        &user,
+        token,
+        req.current_password,
+        req.new_password,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ResetRequest {
+    email: String,
+}
+
+/// Always 202, whether or not the email has an account.
+async fn request_password_reset(
+    State(state): State<AppState>,
+    client_ip: ClientIp,
+    Json(req): Json<ResetRequest>,
+) -> Result<StatusCode, AppError> {
+    application::request_password_reset(&state, &client_ip.key(), &req.email).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+struct ResetPassword {
+    token: String,
+    password: String,
+}
+
+async fn reset_password(
+    State(state): State<AppState>,
+    Json(req): Json<ResetPassword>,
+) -> Result<StatusCode, AppError> {
+    application::reset_password(&state.db, &req.token, req.password).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_users(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<Json<Vec<UserSummary>>, AppError> {
+    Ok(Json(application::list_super_users(&state.db, &user).await?))
+}
+
+#[derive(Deserialize)]
+struct InviteUser {
+    email: String,
+    full_name: String,
+}
+
+async fn invite_user(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Json(req): Json<InviteUser>,
+) -> Result<(StatusCode, Json<User>), AppError> {
+    let invited = application::invite_super_user(&state, &user, &req.email, &req.full_name).await?;
+    Ok((StatusCode::CREATED, Json(invited)))
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {

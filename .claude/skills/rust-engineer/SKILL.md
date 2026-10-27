@@ -31,6 +31,8 @@ Load detailed guidance based on context:
 
 | Topic | Reference | Load When |
 |-------|-----------|-----------|
+| Project Goal | `references/project-goal.md` | Always, before any change: goal, business rules, constraints, and the README update every change needs |
+| Platform Architecture | `references/architecture.md` | Tenancy, provisioning, allowances/limits, billing/Stripe, usage metering, PIN login, permissions, admin ↔ tenant calls |
 | Ownership | `references/ownership.md` | Lifetimes, borrowing, smart pointers, Pin |
 | Traits | `references/traits.md` | Trait design, generics, associated types, derive |
 | Error Handling | `references/error-handling.md` | Result, Option, ?, custom errors, thiserror |

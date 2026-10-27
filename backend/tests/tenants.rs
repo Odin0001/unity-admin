@@ -57,7 +57,7 @@ async fn rejects_invalid_and_duplicate_slugs(db: PgPool) {
 async fn users_outside_the_master_tenant_cannot_manage_tenants(db: PgPool) {
     let app = TestApp::new(db).await;
 
-    sqlx::query("INSERT INTO tenants (slug, name, api_key_hash) VALUES ('acme', 'Acme', 'x')")
+    sqlx::query("INSERT INTO tenants (slug, name, pin, api_key_hash) VALUES ('acme', 'Acme', 'ACME42', 'x')")
         .execute(&app.db)
         .await
         .expect("create tenant");

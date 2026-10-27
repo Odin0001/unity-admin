@@ -2,7 +2,7 @@
 name = "admin"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 publish = false
 
 [[bin]]
@@ -35,6 +35,16 @@ base64 = "0.23"
 sha2 = "0.10"
 hex = "0.4"
 argon2 = "0.5"
+
+# signed calls to tenant deployments
+ed25519-dalek = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+
+# password reset and invitation emails over SMTP, rustls with bundled roots
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "builder", "hostname", "tokio1-rustls-tls"] }
+
+# shared rate-limit counters
+redis = { version = "1", default-features = false, features = ["tokio-comp", "connection-manager"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

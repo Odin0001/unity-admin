@@ -1,8 +1,17 @@
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use admin::{
-    modules::identity::application,
-    platform::{db, error::AppError, AppState},
+    modules::{
+        identity::application,
+        tenants::{TenantClient, TenantClientError},
+    },
+    platform::{
+        db,
+        error::AppError,
+        mail::{MailError, Mailer},
+        rate_limit::RateLimiter,
+        AppState,
+    },
 };
 use tokio::signal::unix::{signal, SignalKind};
 
@@ -12,6 +21,12 @@ enum StartupError {
     Env(#[source] dotenvy::Error),
     #[error(transparent)]
     Db(#[from] db::DbError),
+    #[error(transparent)]
+    TenantClient(#[from] TenantClientError),
+    #[error(transparent)]
+    Mail(#[from] MailError),
+    #[error("can't reach Redis: {0}")]
+    Redis(#[from] redis::RedisError),
     #[error("failed to create super user: {0}")]
     SuperUser(#[source] AppError),
     #[error("failed to bind {addr}: {source}")]
@@ -48,7 +63,19 @@ async fn run() -> Result<(), StartupError> {
         .await
         .map_err(StartupError::SuperUser)?;
 
-    let state = AppState { db: pool };
+    let tenant_client = TenantClient::from_env()?;
+    match tenant_client.public_key() {
+        Some(key) => tracing::info!(%key, "tenants verify admin calls with this ADMIN_PUBLIC_KEY"),
+        None => tracing::warn!("ADMIN_SIGNING_KEY is not set; admin can't call tenants"),
+    }
+
+    let state = AppState {
+        db: pool,
+        tenant_client,
+        limiter: RateLimiter::from_env("admin").await?,
+        mailer: Mailer::from_env()?,
+        public_url: public_url("http://localhost:8081"),
+    };
     tokio::spawn(purge_sessions(state.clone()));
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".to_string());
@@ -61,7 +88,8 @@ async fn run() -> Result<(), StartupError> {
 
     tracing::info!(%bind_addr, "admin service listening");
 
-    axum::serve(listener, admin::app(state))
+    let app = admin::app(state).into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(StartupError::Serve)
@@ -77,6 +105,16 @@ async fn purge_sessions(state: AppState) {
             Err(err) => tracing::warn!(%err, "failed to purge expired sessions"),
         }
     }
+}
+
+/// `PUBLIC_URL`, where people open the app; links in emails point there.
+fn public_url(default: &str) -> String {
+    std::env::var("PUBLIC_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn init_tracing() {

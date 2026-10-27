@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::modules::identity::domain::{User, IDLE_TIMEOUT_MINS, SESSION_TTL_HOURS};
+use crate::modules::identity::domain::{User, UserSummary, IDLE_TIMEOUT_MINS, SESSION_TTL_HOURS};
 
 #[derive(sqlx::FromRow)]
 struct Credentials {
@@ -20,7 +20,8 @@ pub async fn find_credentials(
         "SELECT u.id, u.tenant_id, u.email, u.full_name, t.is_master, u.password_hash
          FROM users u
          JOIN tenants t ON t.id = u.tenant_id
-         WHERE u.email = $1 AND u.is_active AND t.status = 'active'",
+         WHERE u.email = $1 AND u.is_active AND t.status = 'active'
+           AND u.password_hash IS NOT NULL",
     )
     .bind(email)
     .fetch_optional(db)
@@ -113,4 +114,135 @@ pub async fn insert_master_user(
     .execute(db)
     .await?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Anyone who could sign in, or could once they set a password.
+pub async fn find_active(db: &PgPool, email: &str) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT u.id, u.tenant_id, u.email, u.full_name, t.is_master
+         FROM users u
+         JOIN tenants t ON t.id = u.tenant_id
+         WHERE u.email = $1 AND u.is_active AND t.status = 'active'",
+    )
+    .bind(email)
+    .fetch_optional(db)
+    .await
+}
+
+pub async fn password_hash(db: &PgPool, user_id: Uuid) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(db)
+        .await
+}
+
+/// Replaces any earlier link for the same user, so only the newest works.
+pub async fn insert_reset(
+    db: &PgPool,
+    token_hash: &str,
+    user_id: Uuid,
+    ttl_mins: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "WITH older AS (DELETE FROM password_resets WHERE user_id = $2)
+         INSERT INTO password_resets (token_hash, user_id, expires_at)
+         VALUES ($1, $2, now() + make_interval(mins => $3))",
+    )
+    .bind(token_hash)
+    .bind(user_id)
+    .bind(ttl_mins)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Uses up the link, sets the password and signs the user out everywhere.
+/// `false` when the link is unknown, used or expired.
+pub async fn reset_password(
+    db: &PgPool,
+    token_hash: &str,
+    password_hash: &str,
+) -> Result<bool, sqlx::Error> {
+    let changed: Option<Uuid> = sqlx::query_scalar(
+        "WITH used AS (
+             DELETE FROM password_resets WHERE token_hash = $1 AND expires_at > now()
+             RETURNING user_id
+         ), changed AS (
+             UPDATE users SET password_hash = $2, updated_at = now()
+             WHERE id IN (SELECT user_id FROM used)
+             RETURNING id
+         ), signed_out AS (
+             DELETE FROM auth_sessions WHERE user_id IN (SELECT id FROM changed)
+         )
+         SELECT id FROM changed",
+    )
+    .bind(token_hash)
+    .bind(password_hash)
+    .fetch_optional(db)
+    .await?;
+    Ok(changed.is_some())
+}
+
+/// Ends every other session of the user; the one making the change stays.
+pub async fn change_password(
+    db: &PgPool,
+    user_id: Uuid,
+    password_hash: &str,
+    keep_session: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1")
+        .bind(user_id)
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM auth_sessions WHERE user_id = $1 AND token_hash <> $2")
+        .bind(user_id)
+        .bind(keep_session)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM password_resets WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
+pub async fn delete_expired_resets(db: &PgPool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM password_resets WHERE expires_at <= now()")
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+/// A master-tenant user without a password yet. `None` if the email is
+/// taken.
+pub async fn insert_invited(
+    db: &PgPool,
+    email: &str,
+    full_name: &str,
+) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as(
+        "INSERT INTO users (tenant_id, email, full_name)
+         SELECT id, $1, $2 FROM tenants WHERE is_master
+         ON CONFLICT (email) DO NOTHING
+         RETURNING id, tenant_id, email, full_name, true AS is_master",
+    )
+    .bind(email)
+    .bind(full_name)
+    .fetch_optional(db)
+    .await
+}
+
+pub async fn list_master_users(db: &PgPool) -> Result<Vec<UserSummary>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT u.id, u.email, u.full_name, u.is_active,
+                u.password_hash IS NOT NULL AS has_password, u.created_at
+         FROM users u
+         JOIN tenants t ON t.id = u.tenant_id
+         WHERE t.is_master
+         ORDER BY u.created_at",
+    )
+    .fetch_all(db)
+    .await
 }

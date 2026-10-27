@@ -11,15 +11,24 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use modules::{identity, tenants};
+use modules::{billing, identity, monitoring, tenants};
 use platform::{error::AppError, AppState};
 
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .nest("/auth", identity::router())
+        .nest("/users", identity::users_router())
         .nest("/tenants", tenants::router())
-        .nest("/internal", tenants::internal_router())
+        .nest("/directory", tenants::directory_router())
+        .merge(billing::router())
+        .merge(monitoring::router())
+        .nest(
+            "/internal",
+            tenants::internal_router()
+                .merge(billing::internal_router())
+                .merge(monitoring::internal_router()),
+        )
         .fallback(|| async { AppError::NotFound });
 
     // Paths outside the API that aren't real files get index.html, so

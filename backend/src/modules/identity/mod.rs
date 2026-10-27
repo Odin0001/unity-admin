@@ -4,4 +4,4 @@ pub mod application;
 pub mod domain;
 mod infrastructure;
 
-pub use infrastructure::http::{router, CurrentUser};
+pub use infrastructure::http::{router, users_router, CurrentUser};

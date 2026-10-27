@@ -56,6 +56,8 @@ services:
       # Relative to this file, so `..` is the repo root, where the
       # Containerfile lives (podman-compose picks it up by name).
       context: ..
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: admin:local
     container_name: admin_app
     restart: unless-stopped
@@ -67,9 +69,14 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-admin_owner}:${POSTGRES_PASSWORD:-admin_dev_password}@postgres:5432/${POSTGRES_DB:-platform_admin}
       REDIS_URL: redis://:${REDIS_PASSWORD:-admin_dev_password}@redis:6379
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
       BIND_ADDR: 0.0.0.0:8080
       SUPER_USER_EMAIL: ${SUPER_USER_EMAIL:-}
       SUPER_USER_PASSWORD: ${SUPER_USER_PASSWORD:-}
+      ADMIN_SIGNING_KEY: ${ADMIN_SIGNING_KEY:-}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "${APP_PORT:-8081}:8080"
